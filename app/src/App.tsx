@@ -194,7 +194,7 @@ export default function App() {
         const cleanText = cleanDna(text)
         if (!cleanText) { setError('Target sequence required'); setLoading(false); return }
         addLog(`[crispr] guide+PAM="${crisprPat}", text length=${cleanText.length}`)
-        const fn = wasm['search_rc'] as (p: string, t: string, k: number) => MatchResult[]
+        const fn = wasm['search_iupac_rc'] as (p: string, t: string, k: number) => MatchResult[]
         const res = fn(crisprPat, cleanText, k)
         setResults(res)
         addLog(`[crispr] done — ${res.length} target site${res.length !== 1 ? 's' : ''} found`)

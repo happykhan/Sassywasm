@@ -67,6 +67,21 @@ pub fn search_iupac(pattern: &str, text: &str, k: u32) -> JsValue {
     serde_wasm_bindgen::to_value(&results).unwrap_or(JsValue::NULL)
 }
 
+/// IUPAC forward + reverse-complement search — pattern may contain ambiguity codes on both strands.
+/// Used for CRISPR PAM matching (e.g. guide+NGG pattern searched on both strands).
+#[wasm_bindgen]
+pub fn search_iupac_rc(pattern: &str, text: &str, k: u32) -> JsValue {
+    let pattern_bytes = pattern.as_bytes();
+    let text_bytes = text.as_bytes();
+    let mut searcher = Searcher::<Iupac>::new_rc();
+    let cached = CachedRev::new(text_bytes, true);
+    let matches = searcher.search(pattern_bytes, &cached, k as usize);
+    let results: Vec<MatchResult> = matches.iter().map(|m| {
+        make_result(text_bytes, m.text_start, m.text_end, m.cost, m.cigar.to_string(), m.strand)
+    }).collect();
+    serde_wasm_bindgen::to_value(&results).unwrap_or(JsValue::NULL)
+}
+
 /// Fast match count — no position or CIGAR tracking. Returns number of matches.
 #[wasm_bindgen]
 pub fn count(pattern: &str, text: &str, k: u32) -> usize {

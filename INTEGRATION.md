@@ -34,15 +34,25 @@ your-app/
 Then import and use:
 
 ```typescript
-import init, { search } from '/sassy_wasm.js'
+import init, { search, search_rc, search_iupac, count } from '/sassy_wasm.js'
 
 // Initialise once (loads and compiles the WASM binary)
 await init()
 
-// Run a search
-const matches = search('ATCGATCG', 'TTTATCGATCGAAATCGATCA', 1)
-// matches: Array<{ pos: number, end: number, distance: number, matched_seq: string, cigar: string }>
-console.log(matches)
+// Forward-only DNA search
+const fwdMatches = search('ATCGATCG', 'TTTATCGATCGAAATCGATCA', 1)
+// returns: Array<{ pos, end, distance, matched_seq, cigar, strand: 'fwd' }>
+
+// Forward + reverse complement search (both strands)
+const rcMatches = search_rc('ATCG', 'CCCATCACCC', 1)
+// returns matches with strand: 'fwd' or 'rc'
+
+// IUPAC pattern search (R = A or G, Y = C or T, N = any, etc.)
+const iupacMatches = search_iupac('ATCGRAATCG', 'TTTATCGAAATCG', 0)
+
+// Fast count only — no position tracking, faster than search()
+const n = count('ATCGATCG', 'ATCGATCGATCGATCG', 0)
+// returns: number
 ```
 
 ## Option 2: Load from a GitHub release URL
@@ -105,16 +115,7 @@ export function runSearch(pattern: string, text: string, k: number) {
 
 Loads and compiles the WASM binary. Call once before any other function. If `wasmUrl` is omitted, the binary is resolved relative to the JS file.
 
-### `search(pattern: string, text: string, k: number): MatchResult[]`
-
-Searches for all approximate occurrences of `pattern` in `text` with at most `k` errors (mismatches + indels).
-
-**Parameters:**
-- `pattern` — query sequence, uppercase DNA (ACGT only)
-- `text` — target sequence, uppercase DNA (ACGT only)
-- `k` — maximum edit distance (0 = exact match, 5 = very fuzzy)
-
-**Returns:** array of match objects:
+All search functions share this return type (except `count`):
 
 ```typescript
 interface MatchResult {
@@ -122,9 +123,52 @@ interface MatchResult {
   end: number         // 0-based end position (exclusive)
   distance: number    // edit distance from pattern to matched substring
   matched_seq: string // substring of text that was matched
-  cigar: string       // CIGAR string (M = match, I = insertion, D = deletion)
+  cigar: string       // CIGAR string (= match, X mismatch, I insertion, D deletion)
+  strand: 'fwd' | 'rc'  // always 'fwd' for search() and search_iupac()
 }
 ```
+
+---
+
+### `search(pattern: string, text: string, k: number): MatchResult[]`
+
+Forward-only DNA search. Returns local-minima matches with edit distance ≤ k.
+
+- `pattern` — uppercase DNA (ACGT only)
+- `text` — uppercase DNA (ACGT only)
+- `k` — max edit distance (0 = exact, 5 = very fuzzy)
+- `strand` is always `'fwd'`
+
+---
+
+### `search_rc(pattern: string, text: string, k: number): MatchResult[]`
+
+Forward **and** reverse-complement search. Reports matches on both strands.
+
+- Same parameters as `search()`
+- `strand` is `'fwd'` or `'rc'` per match
+- Use when sequence orientation is unknown (e.g., raw sequencing reads)
+
+---
+
+### `search_iupac(pattern: string, text: string, k: number): MatchResult[]`
+
+Forward search with IUPAC ambiguity codes in the **pattern**.
+
+- `pattern` — uppercase IUPAC (ACGTRYMKSWHBDVN)
+- `text` — uppercase DNA (ACGT only; no ambiguity in the text)
+- Use for degenerate primer design or consensus motif searching
+
+IUPAC codes: `R`=A/G, `Y`=C/T, `S`=G/C, `W`=A/T, `K`=G/T, `M`=A/C, `B`=not-A, `D`=not-C, `H`=not-G, `V`=not-T, `N`=any
+
+---
+
+### `count(pattern: string, text: string, k: number): number`
+
+Fast match count. Returns the number of approximate matches without tracking positions, CIGAR, or matched sequences. Use when you only need to know if/how many matches exist.
+
+- Same parameters as `search()`
+- Substantially faster than `search()` for large texts — no backtracking step
 
 ## Building from source
 

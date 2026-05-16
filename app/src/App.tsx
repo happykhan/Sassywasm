@@ -1,5 +1,8 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
+import { AppShell, FileUpload, Alert } from '@genomicx/ui'
 import './App.css'
+
+const APP_VERSION = '0.1.0'
 
 interface MatchResult {
   pos: number
@@ -14,7 +17,6 @@ const EXAMPLE = {
   text: 'TTTTTTTTTTTTTATCGATCGATCGATCGATCGAAAAAAAAAAAAAATCGATCGATCTATCGATCGAAAAAAAAATCGATCGATCGATCGATCG',
 }
 
-// WASM module state
 let wasmSearch: ((pattern: string, text: string, k: number) => MatchResult[]) | null = null
 let wasmLoading = false
 let wasmError: string | null = null
@@ -38,23 +40,27 @@ function parseFasta(content: string): string {
   const lines = content.split('\n')
   const seqLines: string[] = []
   let inSequence = false
-
   for (const line of lines) {
     const trimmed = line.trim()
     if (trimmed.startsWith('>')) {
-      if (inSequence) break // only take the first sequence
+      if (inSequence) break
       inSequence = true
       continue
     }
-    if (inSequence && trimmed.length > 0) {
-      seqLines.push(trimmed)
-    }
+    if (inSequence && trimmed.length > 0) seqLines.push(trimmed)
   }
-
   return seqLines.join('')
 }
 
-function App() {
+function readFileText(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = (ev) => resolve(ev.target?.result as string)
+    reader.readAsText(file)
+  })
+}
+
+export default function App() {
   const [pattern, setPattern] = useState('')
   const [text, setText] = useState('')
   const [k, setK] = useState(1)
@@ -62,70 +68,50 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [searchTime, setSearchTime] = useState<number | null>(null)
-  const patternFileRef = useRef<HTMLInputElement>(null)
-  const textFileRef = useRef<HTMLInputElement>(null)
+  const [patternFiles, setPatternFiles] = useState<File[]>([])
+  const [textFiles, setTextFiles] = useState<File[]>([])
 
-  const handleFileUpload = useCallback(
-    (setter: (val: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      if (!file) return
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        const content = ev.target?.result as string
-        if (file.name.endsWith('.fasta') || file.name.endsWith('.fa') || file.name.endsWith('.fna')) {
-          setter(parseFasta(content))
-        } else {
-          // Plain text file — use as-is
-          setter(content.trim())
-        }
-      }
-      reader.readAsText(file)
-    },
-    []
-  )
+  useEffect(() => {
+    const file = patternFiles[0]
+    if (!file) return
+    readFileText(file).then((content) =>
+      setPattern(file.name.match(/\.(fasta|fa|fna)$/i) ? parseFasta(content) : content.trim())
+    )
+  }, [patternFiles])
+
+  useEffect(() => {
+    const file = textFiles[0]
+    if (!file) return
+    readFileText(file).then((content) =>
+      setText(file.name.match(/\.(fasta|fa|fna)$/i) ? parseFasta(content) : content.trim())
+    )
+  }, [textFiles])
+
+  const handlePatternFiles = useCallback((files: File[]) => setPatternFiles(files), [])
+  const handleTextFiles = useCallback((files: File[]) => setTextFiles(files), [])
 
   const handleSearch = useCallback(async () => {
     setError(null)
     setResults([])
     setSearchTime(null)
-
-    if (!pattern.trim()) {
-      setError('Pattern is required')
-      return
-    }
-    if (!text.trim()) {
-      setError('Target text is required')
-      return
-    }
+    if (!pattern.trim()) { setError('Pattern is required'); return }
+    if (!text.trim()) { setError('Target text is required'); return }
 
     setLoading(true)
     try {
       await loadWasm()
-      if (wasmError) {
-        setError(`Failed to load WASM: ${wasmError}`)
-        return
-      }
-      if (!wasmSearch) {
-        setError('WASM module not available')
-        return
-      }
+      if (wasmError) { setError(`Failed to load WASM: ${wasmError}`); return }
+      if (!wasmSearch) { setError('WASM module not available'); return }
 
       const cleanPattern = pattern.trim().toUpperCase().replace(/[^ACGT]/g, '')
       const cleanText = text.trim().toUpperCase().replace(/[^ACGT]/g, '')
 
-      if (cleanPattern.length === 0) {
-        setError('Pattern must contain valid DNA characters (ACGT)')
-        return
-      }
-      if (cleanText.length === 0) {
-        setError('Target must contain valid DNA characters (ACGT)')
-        return
-      }
+      if (!cleanPattern.length) { setError('Pattern must contain valid DNA characters (ACGT)'); return }
+      if (!cleanText.length) { setError('Target must contain valid DNA characters (ACGT)'); return }
 
       const t0 = performance.now()
       const matches = wasmSearch(cleanPattern, cleanText, k)
-      const t1 = performance.now()
-      setSearchTime(t1 - t0)
+      setSearchTime(performance.now() - t0)
       setResults(matches)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -135,76 +121,67 @@ function App() {
   }, [pattern, text, k])
 
   return (
-    <div className="container">
-      <header>
-        <h1>Sassywasm</h1>
-        <p className="subtitle">
-          SIMD-accelerated approximate DNA string matching in the browser
-        </p>
-        <p className="credit">
-          Powered by <a href="https://github.com/RagnarGrootKoerkamp/sassy" target="_blank" rel="noopener">sassy</a> compiled to WebAssembly
-        </p>
-      </header>
+    <AppShell
+      appName="Sassywasm"
+      version={APP_VERSION}
+      githubUrl="https://github.com/happykhan/Sassywasm"
+    >
+      <main className="tool-main">
+        <div className="hero">
+          <h1 className="hero-title">Sassywasm</h1>
+          <p className="hero-sub">
+            SIMD-accelerated approximate DNA string matching in the browser, powered by{' '}
+            <a href="https://github.com/RagnarGrootKoerkamp/sassy" target="_blank" rel="noopener">sassy</a>{' '}
+            compiled to WebAssembly
+          </p>
+        </div>
 
-      <main>
         <div className="input-grid">
-          <div className="input-section">
-            <label htmlFor="pattern">Pattern (short DNA sequence)</label>
+          <div className="card">
+            <label className="field-label">Pattern (short DNA sequence)</label>
             <textarea
-              id="pattern"
+              className="seq-input"
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
               placeholder="e.g. ATCGATCG"
               rows={3}
             />
-            <div className="file-upload">
-              <button type="button" onClick={() => patternFileRef.current?.click()}>
-                Upload FASTA
-              </button>
-              <input
-                ref={patternFileRef}
-                type="file"
-                accept=".fasta,.fa,.fna,.txt"
-                onChange={handleFileUpload(setPattern)}
-                hidden
-              />
-            </div>
+            <FileUpload
+              files={patternFiles}
+              onFilesChange={handlePatternFiles}
+              accept=".fasta,.fa,.fna,.txt"
+              label="or upload FASTA"
+            />
           </div>
 
-          <div className="input-section">
-            <label htmlFor="text">Target (longer DNA sequence)</label>
+          <div className="card">
+            <label className="field-label">Target (longer DNA sequence)</label>
             <textarea
-              id="text"
+              className="seq-input"
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder="e.g. AAAAATCAATCGGGGG"
               rows={3}
             />
-            <div className="file-upload">
-              <button type="button" onClick={() => textFileRef.current?.click()}>
-                Upload FASTA
-              </button>
-              <input
-                ref={textFileRef}
-                type="file"
-                accept=".fasta,.fa,.fna,.txt"
-                onChange={handleFileUpload(setText)}
-                hidden
-              />
-            </div>
+            <FileUpload
+              files={textFiles}
+              onFilesChange={handleTextFiles}
+              accept=".fasta,.fa,.fna,.txt"
+              label="or upload FASTA"
+            />
           </div>
         </div>
 
         <div className="controls">
           <button
             type="button"
-            className="example-btn"
+            className="btn-outline"
             onClick={() => { setPattern(EXAMPLE.pattern); setText(EXAMPLE.text) }}
           >
             Load example
           </button>
           <div className="slider-group">
-            <label htmlFor="k-slider">Max errors: {k}</label>
+            <label htmlFor="k-slider" className="slider-label">Max errors: {k}</label>
             <input
               id="k-slider"
               type="range"
@@ -216,15 +193,15 @@ function App() {
           </div>
           <button
             type="button"
-            className="search-btn"
+            className="btn-primary"
             onClick={handleSearch}
             disabled={loading}
           >
-            {loading ? 'Searching...' : 'Search'}
+            {loading ? 'Searching…' : 'Search'}
           </button>
         </div>
 
-        {error && <div className="error">{error}</div>}
+        {error && <Alert variant="error">{error}</Alert>}
 
         {searchTime !== null && (
           <p className="timing">
@@ -234,7 +211,7 @@ function App() {
         )}
 
         {results.length > 0 && (
-          <div className="results">
+          <div className="results card">
             <table>
               <thead>
                 <tr>
@@ -252,7 +229,7 @@ function App() {
                     <td>{m.end}</td>
                     <td>{m.distance}</td>
                     <td className="seq">{m.matched_seq}</td>
-                    <td className="cigar">{m.cigar}</td>
+                    <td className="seq">{m.cigar}</td>
                   </tr>
                 ))}
               </tbody>
@@ -260,14 +237,6 @@ function App() {
           </div>
         )}
       </main>
-
-      <footer>
-        <p>
-          <a href="https://github.com/happykhan/Sassywasm" target="_blank" rel="noopener">Source on GitHub</a>
-        </p>
-      </footer>
-    </div>
+    </AppShell>
   )
 }
-
-export default App

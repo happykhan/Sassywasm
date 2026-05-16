@@ -10,30 +10,49 @@ interface MatchResult {
   distance: number
   matched_seq: string
   cigar: string
+  strand: 'fwd' | 'rc'
 }
 
-const EXAMPLE = {
-  pattern: 'ATCGATCGATCGATCGATCG',
-  text: 'TTTTTTTTTTTTTATCGATCGATCGATCGATCGAAAAAAAAAAAAAATCGATCGATCTATCGATCGAAAAAAAAATCGATCGATCGATCGATCG',
+type SearchMode = 'search' | 'search_rc' | 'search_iupac' | 'count'
+
+const MODES: { value: SearchMode; label: string; description: string }[] = [
+  { value: 'search',       label: 'Forward (DNA)',         description: 'Search forward strand only. Pattern must be ACGT.' },
+  { value: 'search_rc',    label: 'Forward + Rev-comp',    description: 'Search both strands. Useful for sequencing data where orientation is unknown.' },
+  { value: 'search_iupac', label: 'IUPAC (ambiguous)',     description: 'Pattern may contain IUPAC ambiguity codes (R, Y, N, etc.).' },
+  { value: 'count',        label: 'Count only',            description: 'Fast: returns match count with no position or CIGAR tracking.' },
+]
+
+const EXAMPLES: Record<SearchMode, { pattern: string; text: string; label: string }> = {
+  search: {
+    label: 'Forward DNA search (3 approximate matches)',
+    pattern: 'ATCGATCGATCGATCGATCG',
+    text:    'TTTTTTTTTTTTTATCGATCGATCGATCGATCGAAAAAAAAAAAAAATCGATCGATCTATCGATCGAAAAAAAAATCGATCGATCGATCGATCG',
+  },
+  search_rc: {
+    label: 'Forward + reverse complement (matches on both strands)',
+    pattern: 'ATCG',
+    text:    'CCCATCACCC',
+  },
+  search_iupac: {
+    label: 'IUPAC pattern (R = A or G)',
+    pattern: 'ATCGRAATCG',
+    text:    'TTTATCGAAATCGTTTTTTATCGGAATCG',
+  },
+  count: {
+    label: 'Count matches only',
+    pattern: 'ATCGATCG',
+    text:    'ATCGATCGATCGATCGTTTATCGATCG',
+  },
 }
 
-let wasmSearch: ((pattern: string, text: string, k: number) => MatchResult[]) | null = null
-let wasmLoading = false
-let wasmError: string | null = null
+let wasmModule: Record<string, unknown> | null = null
 
-async function loadWasm(): Promise<void> {
-  if (wasmSearch || wasmLoading) return
-  wasmLoading = true
-  try {
-    const wasm = await import('sassy-wasm')
-    await wasm.default()
-    wasmSearch = wasm.search
-  } catch (e) {
-    wasmError = e instanceof Error ? e.message : String(e)
-    throw e
-  } finally {
-    wasmLoading = false
-  }
+async function loadWasm(): Promise<Record<string, unknown>> {
+  if (wasmModule) return wasmModule
+  const wasm = await import('sassy-wasm')
+  await (wasm.default as () => Promise<void>)()
+  wasmModule = wasm as unknown as Record<string, unknown>
+  return wasmModule
 }
 
 function parseFasta(content: string): string {
@@ -60,11 +79,21 @@ function readFileText(file: File): Promise<string> {
   })
 }
 
+function cleanDna(seq: string): string {
+  return seq.trim().toUpperCase().replace(/[^ACGT]/g, '')
+}
+
+function cleanIupac(seq: string): string {
+  return seq.trim().toUpperCase().replace(/[^ACGTRYMKSWHBDVN]/g, '')
+}
+
 export default function App() {
   const [pattern, setPattern] = useState('')
   const [text, setText] = useState('')
   const [k, setK] = useState(1)
+  const [mode, setMode] = useState<SearchMode>('search')
   const [results, setResults] = useState<MatchResult[]>([])
+  const [matchCount, setMatchCount] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [searchTime, setSearchTime] = useState<number | null>(null)
@@ -90,35 +119,51 @@ export default function App() {
   const handlePatternFiles = useCallback((files: File[]) => setPatternFiles(files), [])
   const handleTextFiles = useCallback((files: File[]) => setTextFiles(files), [])
 
+  const loadExample = useCallback(() => {
+    const ex = EXAMPLES[mode]
+    setPattern(ex.pattern)
+    setText(ex.text)
+  }, [mode])
+
   const handleSearch = useCallback(async () => {
     setError(null)
     setResults([])
+    setMatchCount(null)
     setSearchTime(null)
+
     if (!pattern.trim()) { setError('Pattern is required'); return }
-    if (!text.trim()) { setError('Target text is required'); return }
+    if (!text.trim()) { setError('Target sequence is required'); return }
 
     setLoading(true)
     try {
-      await loadWasm()
-      if (wasmError) { setError(`Failed to load WASM: ${wasmError}`); return }
-      if (!wasmSearch) { setError('WASM module not available'); return }
+      const wasm = await loadWasm()
+      const cleanPattern = mode === 'search_iupac' ? cleanIupac(pattern) : cleanDna(pattern)
+      const cleanText = cleanDna(text)
 
-      const cleanPattern = pattern.trim().toUpperCase().replace(/[^ACGT]/g, '')
-      const cleanText = text.trim().toUpperCase().replace(/[^ACGT]/g, '')
-
-      if (!cleanPattern.length) { setError('Pattern must contain valid DNA characters (ACGT)'); return }
+      if (!cleanPattern.length) { setError('Pattern contains no valid characters for the selected mode'); return }
       if (!cleanText.length) { setError('Target must contain valid DNA characters (ACGT)'); return }
 
       const t0 = performance.now()
-      const matches = wasmSearch(cleanPattern, cleanText, k)
+
+      if (mode === 'count') {
+        const fn = wasm['count'] as (p: string, t: string, k: number) => number
+        const n = fn(cleanPattern, cleanText, k)
+        setMatchCount(n)
+      } else {
+        const fn = wasm[mode] as (p: string, t: string, k: number) => MatchResult[]
+        const matches = fn(cleanPattern, cleanText, k)
+        setResults(matches)
+      }
+
       setSearchTime(performance.now() - t0)
-      setResults(matches)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
-  }, [pattern, text, k])
+  }, [pattern, text, k, mode])
+
+  const showStrand = mode === 'search_rc'
 
   return (
     <AppShell
@@ -136,14 +181,28 @@ export default function App() {
           </p>
         </div>
 
+        <div className="mode-bar">
+          {MODES.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              className={`mode-btn${mode === m.value ? ' active' : ''}`}
+              onClick={() => { setMode(m.value); setResults([]); setMatchCount(null); setSearchTime(null) }}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <p className="mode-desc">{MODES.find((m) => m.value === mode)?.description}</p>
+
         <div className="input-grid">
           <div className="card">
-            <label className="field-label">Pattern (short DNA sequence)</label>
+            <label className="field-label">Pattern {mode === 'search_iupac' ? '(IUPAC)' : '(ACGT)'}</label>
             <textarea
               className="seq-input"
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
-              placeholder="e.g. ATCGATCG"
+              placeholder={mode === 'search_iupac' ? 'e.g. ATCGRAATCG' : 'e.g. ATCGATCG'}
               rows={3}
             />
             <FileUpload
@@ -154,30 +213,28 @@ export default function App() {
             />
           </div>
 
-          <div className="card">
-            <label className="field-label">Target (longer DNA sequence)</label>
-            <textarea
-              className="seq-input"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="e.g. AAAAATCAATCGGGGG"
-              rows={3}
-            />
-            <FileUpload
-              files={textFiles}
-              onFilesChange={handleTextFiles}
-              accept=".fasta,.fa,.fna,.txt"
-              label="or upload FASTA"
-            />
-          </div>
+          {mode !== 'count' || true ? (
+            <div className="card">
+              <label className="field-label">Target (longer DNA sequence)</label>
+              <textarea
+                className="seq-input"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="e.g. AAAAATCAATCGGGGG"
+                rows={3}
+              />
+              <FileUpload
+                files={textFiles}
+                onFilesChange={handleTextFiles}
+                accept=".fasta,.fa,.fna,.txt"
+                label="or upload FASTA"
+              />
+            </div>
+          ) : null}
         </div>
 
         <div className="controls">
-          <button
-            type="button"
-            className="btn-outline"
-            onClick={() => { setPattern(EXAMPLE.pattern); setText(EXAMPLE.text) }}
-          >
+          <button type="button" className="btn-outline" onClick={loadExample}>
             Load example
           </button>
           <div className="slider-group">
@@ -205,8 +262,9 @@ export default function App() {
 
         {searchTime !== null && (
           <p className="timing">
-            Found {results.length} match{results.length !== 1 ? 'es' : ''} in{' '}
-            {searchTime.toFixed(2)} ms
+            {mode === 'count'
+              ? `${matchCount} match${matchCount !== 1 ? 'es' : ''} in ${searchTime.toFixed(2)} ms`
+              : `Found ${results.length} match${results.length !== 1 ? 'es' : ''} in ${searchTime.toFixed(2)} ms`}
           </p>
         )}
 
@@ -218,6 +276,7 @@ export default function App() {
                   <th>Position</th>
                   <th>End</th>
                   <th>Distance</th>
+                  {showStrand && <th>Strand</th>}
                   <th>Matched Sequence</th>
                   <th>CIGAR</th>
                 </tr>
@@ -228,6 +287,13 @@ export default function App() {
                     <td>{m.pos}</td>
                     <td>{m.end}</td>
                     <td>{m.distance}</td>
+                    {showStrand && (
+                      <td>
+                        <span className={`strand-badge strand-${m.strand}`}>
+                          {m.strand === 'fwd' ? '+ fwd' : '− rc'}
+                        </span>
+                      </td>
+                    )}
                     <td className="seq">{m.matched_seq}</td>
                     <td className="seq">{m.cigar}</td>
                   </tr>

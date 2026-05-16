@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Build sassy-wasm
+        working-directory: sassy-wasm
+        run: RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm install
+
+      - name: Build app
+        working-directory: app
+        run: npm run build
+
+      - name: Install sassy CLI for correctness test
+        run: RUSTFLAGS="-C target-cpu=native" cargo install sassy
+
+      - name: Run correctness test
+        working-directory: tests
+        run: |
+          npm install
+          node correctness.mjs

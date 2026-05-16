@@ -1,0 +1,15 @@
+# Rust
+sassy-wasm/target/
+sassy-wasm/pkg/
+
+# Node
+app/node_modules/
+app/dist/
+tests/node_modules/
+
+# OS
+.DS_Store
+
+# Lock files (npm version mismatch across CI)
+app/package-lock.json
+tests/package-lock.json

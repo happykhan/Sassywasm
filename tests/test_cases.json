@@ -1,0 +1,20 @@
+[
+  {
+    "name": "exact match",
+    "pattern": "ATCGATCG",
+    "text": "AAAAAATCGATCGAAAAA",
+    "k": 0
+  },
+  {
+    "name": "one mismatch",
+    "pattern": "ATCGATCG",
+    "text": "AAAAAATCAATCGAAAAA",
+    "k": 1
+  },
+  {
+    "name": "two mismatches in longer text",
+    "pattern": "GATTACA",
+    "text": "CCCCCGAATACACCCCGATTACACCCC",
+    "k": 2
+  }
+]

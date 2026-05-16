@@ -1,0 +1,6 @@
+{
+  "name": "sassywasm-tests",
+  "private": true,
+  "type": "module",
+  "dependencies": {}
+}

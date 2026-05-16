@@ -1,0 +1,37 @@
+name: Release WASM
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Build sassy-wasm
+        working-directory: sassy-wasm
+        run: RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web
+
+      - name: Create GitHub release with WASM assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sassy-wasm/pkg/sassy_wasm.js
+            sassy-wasm/pkg/sassy_wasm.d.ts
+            sassy-wasm/pkg/sassy_wasm_bg.wasm
+            sassy-wasm/pkg/sassy_wasm_bg.wasm.d.ts
+          generate_release_notes: true

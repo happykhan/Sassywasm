@@ -110,6 +110,17 @@ function renderGrep(text: string, matches: MatchResult[]): React.ReactNode[] {
 
 import React from 'react'
 
+function SassyIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" width="32" height="32">
+      <path d="M28 4C14 4 14 14 16 16C18 18 18 28 4 28" stroke="#06b6d4" strokeWidth="3" strokeLinecap="round"/>
+      <path d="M4 4C18 4 18 14 16 16C14 18 14 28 28 28" stroke="#0d9488" strokeWidth="3" strokeLinecap="round"/>
+      <circle cx="16" cy="16" r="4.5" fill="#0d9488"/>
+      <circle cx="16" cy="16" r="2" fill="white"/>
+    </svg>
+  )
+}
+
 export default function App() {
   const [mode, setMode] = useState<Mode>('search')
   const [pattern, setPattern] = useState('')
@@ -216,6 +227,7 @@ export default function App() {
       appName="Sassywasm"
       version={APP_VERSION}
       githubUrl="https://github.com/happykhan/Sassywasm"
+      icon={<SassyIcon />}
     >
       <main className="tool-main">
         <div className="hero">

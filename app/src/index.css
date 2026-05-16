@@ -1,3 +1,6 @@
+@import '@genomicx/ui/styles/tokens.css';
+@import '@genomicx/ui/styles/components.css';
+
 *, *::before, *::after {
   margin: 0;
   padding: 0;

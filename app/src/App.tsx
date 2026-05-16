@@ -9,6 +9,11 @@ interface MatchResult {
   cigar: string
 }
 
+const EXAMPLE = {
+  pattern: 'ATCGATCGATCGATCGATCG',
+  text: 'TTTTTTTTTTTTTATCGATCGATCGATCGATCGAAAAAAAAAAAAAATCGATCGATCTATCGATCGAAAAAAAAATCGATCGATCGATCGATCG',
+}
+
 // WASM module state
 let wasmSearch: ((pattern: string, text: string, k: number) => MatchResult[]) | null = null
 let wasmLoading = false
@@ -191,6 +196,13 @@ function App() {
         </div>
 
         <div className="controls">
+          <button
+            type="button"
+            className="example-btn"
+            onClick={() => { setPattern(EXAMPLE.pattern); setText(EXAMPLE.text) }}
+          >
+            Load example
+          </button>
           <div className="slider-group">
             <label htmlFor="k-slider">Max errors: {k}</label>
             <input

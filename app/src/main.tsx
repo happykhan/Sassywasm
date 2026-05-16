@@ -1,5 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import '@genomicx/ui/styles/tokens.css'
+import '@genomicx/ui/styles/components.css'
 import './index.css'
 import App from './App.tsx'
 

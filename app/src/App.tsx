@@ -269,37 +269,25 @@ export default function App() {
         )}
 
         {results.length > 0 && (
-          <div className="results card">
-            <table>
-              <thead>
-                <tr>
-                  <th>Position</th>
-                  <th>End</th>
-                  <th>Distance</th>
-                  {showStrand && <th>Strand</th>}
-                  <th>Matched Sequence</th>
-                  <th>CIGAR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {results.map((m, i) => (
-                  <tr key={i}>
-                    <td>{m.pos}</td>
-                    <td>{m.end}</td>
-                    <td>{m.distance}</td>
-                    {showStrand && (
-                      <td>
-                        <span className={`strand-badge strand-${m.strand}`}>
-                          {m.strand === 'fwd' ? '+ fwd' : '− rc'}
-                        </span>
-                      </td>
-                    )}
-                    <td className="seq">{m.matched_seq}</td>
-                    <td className="seq">{m.cigar}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="match-list">
+            {results.map((m, i) => (
+              <div key={i} className="match-card">
+                <div className="match-header">
+                  <span className="match-index">#{i + 1}</span>
+                  <span className={`dist-badge dist-${Math.min(m.distance, 3)}`}>
+                    {m.distance === 0 ? 'Exact' : `${m.distance} error${m.distance !== 1 ? 's' : ''}`}
+                  </span>
+                  <span className="match-pos">pos {m.pos}–{m.end}</span>
+                  {showStrand && (
+                    <span className={`strand-badge strand-${m.strand}`}>
+                      {m.strand === 'fwd' ? '+ fwd' : '− rc'}
+                    </span>
+                  )}
+                  <span className="match-cigar">{m.cigar}</span>
+                </div>
+                <div className="match-seq">{m.matched_seq}</div>
+              </div>
+            ))}
           </div>
         )}
       </main>

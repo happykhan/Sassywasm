@@ -590,3 +590,111 @@
   margin-top: var(--gx-space-3);
 }
 .genome-progress .gx-progress-wrap { flex: 1; }
+
+/* ---- Target source toggle (Reference sequence / Upload your own) ---- */
+.source-toggle {
+  display: flex;
+  gap: var(--gx-space-2);
+  margin-bottom: var(--gx-space-3);
+}
+.source-toggle .mode-btn {
+  flex-direction: row;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.ref-pane { display: flex; flex-direction: column; gap: var(--gx-space-3); }
+
+/* Loaded-genome status chip */
+.ref-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--gx-space-3);
+  background: var(--gx-accent-dim);
+  border: 1px solid var(--gx-accent);
+  border-radius: var(--gx-radius-pill);
+  padding: var(--gx-space-2) var(--gx-space-4);
+}
+.ref-chip-label {
+  color: var(--gx-accent);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.ref-chip-clear {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--gx-accent);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.ref-chip-clear:hover { text-decoration: underline; }
+
+/* Reference genome selector */
+.ref-selector { display: flex; flex-direction: column; gap: var(--gx-space-4); }
+.ref-block { display: flex; flex-direction: column; gap: var(--gx-space-2); }
+.ref-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--gx-space-2);
+}
+.ref-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  background: var(--gx-surface);
+  border: 1px solid var(--gx-border);
+  border-radius: var(--gx-radius);
+  padding: var(--gx-space-2) var(--gx-space-3);
+  cursor: pointer;
+  transition: all var(--gx-transition);
+}
+.ref-pick:hover:not(:disabled) {
+  background: var(--gx-surface-hover);
+  border-color: var(--gx-accent);
+}
+.ref-pick:disabled { opacity: 0.5; cursor: default; }
+.ref-pick-name { color: var(--gx-text); font-size: 0.85rem; }
+.ref-pick-meta {
+  font-family: var(--gx-font-mono);
+  font-size: 0.72rem;
+  color: var(--gx-text-muted);
+}
+.ref-human-row {
+  display: flex;
+  gap: var(--gx-space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ref-human-row .pam-select { flex: 1; min-width: 160px; }
+.ref-hint {
+  font-size: 0.78rem;
+  color: var(--gx-text-muted);
+  margin-top: var(--gx-space-1);
+}
+
+/* Windowed grep view for genome-scale targets */
+.grep-window {
+  display: flex;
+  gap: var(--gx-space-3);
+  align-items: baseline;
+  padding: var(--gx-space-1) 0;
+  border-bottom: 1px solid var(--gx-border);
+}
+.grep-window:last-child { border-bottom: none; }
+.grep-window-pos {
+  font-family: var(--gx-font-mono);
+  font-size: 0.78rem;
+  color: var(--gx-text-muted);
+  min-width: 9rem;
+  flex-shrink: 0;
+}
+.grep-window-seq {
+  font-family: var(--gx-font-mono);
+  font-size: 0.9rem;
+  word-break: break-all;
+}
+.grep-ellipsis { color: var(--gx-text-muted); }

@@ -128,3 +128,63 @@ test('404.html fallback is served with the redirect script', async ({ request })
   expect(res.status()).toBe(200)
   expect(await res.text()).toContain('pathSegmentsToKeep')
 })
+
+// Reference Genomes downloader ------------------------------------------------
+// External APIs (ENA, Ensembl) are mocked so the test is deterministic and runs
+// offline. The mock returns a known E. coli-like sequence we can assert on.
+
+const FAKE_ENA_FASTA =
+  '>ENA|U00096|U00096.3 Escherichia coli str. K-12 substr. MG1655, complete genome.\n' +
+  'ATCGATCGATCGATCGATCG'.repeat(20) + '\n'
+
+async function mockEna(page: Page) {
+  await page.route('**/ena/browser/api/fasta/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/x-fasta', body: FAKE_ENA_FASTA }),
+  )
+}
+
+test('Reference Genomes page lists curated bacteria and human chromosomes', async ({ page }) => {
+  await page.goto('genomes')
+  await expect(page.locator('.hero-title')).toHaveText('Reference Genomes')
+  await expect(page.getByText('Escherichia coli K-12 MG1655')).toBeVisible()
+  await expect(page.getByText('Mycobacterium tuberculosis H37Rv')).toBeVisible()
+  // human chromosome selector
+  await expect(page.locator('#chrom-select')).toBeVisible()
+  await expect(page.locator('#chrom-select option')).toHaveCount(24) // chr1–22, X, Y
+})
+
+test('nav action links from the tool page to Reference Genomes', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Reference Genomes' }).first().click()
+  await expect(page).toHaveURL(/\/Sassywasm\/genomes$/)
+  await expect(page.locator('.hero-title')).toHaveText('Reference Genomes')
+})
+
+test('"Use in tool" loads a fetched bacterial genome as the search target', async ({ page }) => {
+  await mockEna(page)
+  await page.goto('genomes')
+
+  const card = page.locator('[data-genome="ecoli-k12"]')
+  await card.getByRole('button', { name: 'Use in tool' }).click()
+
+  // We are routed back to the tool with the sequence loaded into the target box.
+  await expect(page).toHaveURL(/\/Sassywasm\/?$/)
+  const target = page.locator('textarea').nth(1)
+  await expect(target).toHaveValue(/^ATCGATCGATCG/)
+
+  // And it is usable as input: searching for a known motif finds matches.
+  await page.locator('textarea').nth(0).fill('ATCGATCGATCG')
+  await page.locator('button.btn-primary').click()
+  await expect(page.locator('.match-card').first()).toBeVisible()
+})
+
+test('downloading a bacterial genome triggers a FASTA file download', async ({ page }) => {
+  await mockEna(page)
+  await page.goto('genomes')
+
+  const card = page.locator('[data-genome="ecoli-k12"]')
+  const downloadPromise = page.waitForEvent('download')
+  await card.getByRole('button', { name: 'Download' }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toMatch(/U00096\.3\.fasta$/)
+})

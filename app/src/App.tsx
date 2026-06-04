@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
+import { Routes, Route } from 'react-router-dom'
 import { AppShell, FileUpload, Alert, LogConsole } from '@genomicx/ui'
 import './App.css'
 
@@ -22,24 +23,31 @@ const MODES: { value: Mode; label: string; cli: string; description: string }[] 
   { value: 'crispr',  label: 'CRISPR', cli: 'sassy crispr',  description: 'Find CRISPR guide RNA target sites with PAM sequence on both strands.' },
 ]
 
-const EXAMPLES: Record<Mode, { pattern: string; text: string; fasta?: string; pam?: string }> = {
+const EXAMPLES: Record<Mode, { pattern: string; text: string; fasta?: string; pam?: string; k: number; strand?: 'fwd' | 'rc' }> = {
   search: {
     pattern: 'ATCGATCGATCGATCGATCG',
     text:    'TTTTTTTTTTTTTATCGATCGATCGATCGATCGAAAAAAAAAAAAAATCGATCGATCTATCGATCGAAAAAAAAATCGATCGATCGATCGATCG',
+    k:       1,
+    strand:  'fwd',
   },
   grep: {
     pattern: 'ATCGATCG',
     text:    'GGGGGGATCGATCGTTTTTTATCAATCGCCCCCCATCGATCGAAAAAA',
+    k:       1,
+    strand:  'fwd',
   },
   filter: {
     pattern: 'ATCGATCG',
     text:    '',
     fasta:   '>seq1 (matches)\nATCGATCGATCGATCG\n>seq2 (no match)\nGGGGGGGGGGGGGGGG\n>seq3 (1 error)\nATCGATTGATCGATCG\n>seq4 (no match)\nCCCCCCCCCCCCCCCC',
+    k:       1,
+    strand:  'fwd',
   },
   crispr: {
     pattern: 'ATCGATCGATCGATCGATCG',
     text:    'TTTATCGATCGATCGATCGATCGGGGCCCCCCGATCGATCGATCGATCGATCGCCGAATCGATCGATCGATCGATCGAGG',
     pam:     'NGG',
+    k:       1,
   },
 }
 
@@ -77,9 +85,10 @@ function parseFastaFirst(content: string): string {
 }
 
 function readFileText(file: File): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = (ev) => resolve(ev.target?.result as string)
+    reader.onerror = () => reject(reader.error ?? new Error('file read failed'))
     reader.readAsText(file)
   })
 }
@@ -121,7 +130,7 @@ function SassyIcon() {
   )
 }
 
-export default function App() {
+function ToolPage() {
   const [mode, setMode] = useState<Mode>('search')
   const [pattern, setPattern] = useState('')
   const [text, setText] = useState('')
@@ -134,8 +143,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [searchTime, setSearchTime] = useState<number | null>(null)
-  const [patternFiles, setPatternFiles] = useState<File[]>([])
-  const [textFiles, setTextFiles] = useState<File[]>([])
+  // `key` counters force the FileUpload to remount after each read. This resets the
+  // underlying <input> value so re-selecting the *same* file fires a fresh change
+  // event — without this, a second upload of an identical file is silently ignored.
+  const [patternUploadKey, setPatternUploadKey] = useState(0)
+  const [textUploadKey, setTextUploadKey] = useState(0)
   const [logs, setLogs] = useState<string[]>([])
 
   const addLog = useCallback((msg: string) => {
@@ -143,18 +155,32 @@ export default function App() {
     setLogs((prev) => [...prev, `[${ts}] ${msg}`])
   }, [])
 
-  useEffect(() => {
-    const file = patternFiles[0]; if (!file) return
-    readFileText(file).then((c) => setPattern(file.name.match(/\.(fasta|fa|fna)$/i) ? parseFastaFirst(c) : c.trim()))
-  }, [patternFiles])
+  const handlePatternFiles = useCallback((files: File[]) => {
+    const file = files[0]
+    if (!file) return
+    addLog(`[upload] pattern file "${file.name}" (${file.size} bytes)`)
+    readFileText(file)
+      .then((c) => {
+        setPattern(file.name.match(/\.(fasta|fa|fna)$/i) ? parseFastaFirst(c) : c.trim())
+        addLog(`[upload] pattern loaded from "${file.name}"`)
+      })
+      .catch((e) => { setError(`Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`) })
+      .finally(() => setPatternUploadKey((n) => n + 1))
+  }, [addLog])
 
-  useEffect(() => {
-    const file = textFiles[0]; if (!file) return
-    readFileText(file).then((c) => {
-      if (mode === 'filter') setFasta(c)
-      else setText(file.name.match(/\.(fasta|fa|fna)$/i) ? parseFastaFirst(c) : c.trim())
-    })
-  }, [textFiles, mode])
+  const handleTextFiles = useCallback((files: File[]) => {
+    const file = files[0]
+    if (!file) return
+    addLog(`[upload] target file "${file.name}" (${file.size} bytes)`)
+    readFileText(file)
+      .then((c) => {
+        if (mode === 'filter') setFasta(c)
+        else setText(file.name.match(/\.(fasta|fa|fna)$/i) ? parseFastaFirst(c) : c.trim())
+        addLog(`[upload] target loaded from "${file.name}"`)
+      })
+      .catch((e) => { setError(`Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`) })
+      .finally(() => setTextUploadKey((n) => n + 1))
+  }, [addLog, mode])
 
   const loadExample = useCallback(() => {
     const ex = EXAMPLES[mode]
@@ -162,8 +188,12 @@ export default function App() {
     if (mode === 'filter') setFasta(ex.fasta ?? '')
     else setText(ex.text)
     if (mode === 'crispr') setPam(ex.pam ?? 'NGG')
+    setK(ex.k)
+    if (ex.strand) setStrand(ex.strand)
+    setError(null)
     setResults([]); setFilterResults([]); setSearchTime(null)
-  }, [mode])
+    addLog(`[sample] loaded sample data for "${mode}" mode (k=${ex.k})`)
+  }, [mode, addLog])
 
   const handleSearch = useCallback(async () => {
     setError(null); setResults([]); setFilterResults([]); setSearchTime(null)
@@ -223,12 +253,6 @@ export default function App() {
   }, [pattern, text, fasta, pam, k, strand, mode, addLog])
 
   return (
-    <AppShell
-      appName="Sassywasm"
-      version={APP_VERSION}
-      githubUrl="https://github.com/happykhan/Sassywasm"
-      icon={<SassyIcon />}
-    >
       <main className="tool-main">
         <div className="hero">
           <h1 className="hero-title">Sassywasm</h1>
@@ -261,7 +285,7 @@ export default function App() {
               placeholder={mode === 'crispr' ? '20-nt guide sequence, no PAM' : 'e.g. ATCGATCG'}
               rows={3}
             />
-            <FileUpload files={patternFiles} onFilesChange={setPatternFiles} accept=".fasta,.fa,.fna,.txt" label="Upload FASTA" />
+            <FileUpload key={patternUploadKey} files={[]} onFilesChange={handlePatternFiles} multiple={false} accept=".fasta,.fa,.fna,.txt" label="Upload FASTA" />
           </div>
 
           <div className="card">
@@ -281,7 +305,7 @@ export default function App() {
                 rows={3}
               />
             )}
-            <FileUpload files={textFiles} onFilesChange={setTextFiles} accept=".fasta,.fa,.fna,.txt" label="Upload FASTA" />
+            <FileUpload key={textUploadKey} files={[]} onFilesChange={handleTextFiles} multiple={false} accept=".fasta,.fa,.fna,.txt" label="Upload FASTA" />
           </div>
         </div>
 
@@ -298,7 +322,9 @@ export default function App() {
         )}
 
         <div className="controls">
-          <button type="button" className="btn-outline" onClick={loadExample}>Load example</button>
+          <button type="button" className="btn-outline" onClick={loadExample}>
+            Load sample data ({MODES.find((m) => m.value === mode)?.label})
+          </button>
 
           {mode !== 'crispr' && (
             <div className="strand-group">
@@ -386,6 +412,63 @@ export default function App() {
         )}
         <LogConsole logs={logs} title="sassy-wasm log" />
       </main>
+  )
+}
+
+function About() {
+  return (
+    <main className="tool-main about-page">
+      <div className="hero">
+        <h1 className="hero-title">About Sassywasm</h1>
+        <p className="hero-sub">Approximate DNA string matching in the browser</p>
+      </div>
+
+      <div className="card about-card">
+        <p>
+          Sassywasm runs{' '}
+          <a href="https://github.com/RagnarGrootKoerkamp/sassy" target="_blank" rel="noopener">sassy</a>{' '}
+          — a SIMD-accelerated approximate string matching library — compiled to WebAssembly.
+          It finds all positions where a short DNA pattern matches a longer target sequence
+          with at most <em>k</em> edit operations (substitutions, insertions, deletions).
+        </p>
+        <p>
+          Everything runs locally in your browser using WebAssembly SIMD. No sequence data is
+          ever uploaded to a server.
+        </p>
+
+        <h2 className="about-h2">Modes</h2>
+        <ul className="about-list">
+          <li><strong>Search</strong> — find all approximate matches and report positions, distances and alignment.</li>
+          <li><strong>Grep</strong> — show matches highlighted in sequence context for visual inspection.</li>
+          <li><strong>Filter</strong> — given a FASTA file, return only the sequences that match the pattern.</li>
+          <li><strong>CRISPR</strong> — find guide RNA target sites with a PAM sequence on both strands.</li>
+        </ul>
+
+        <h2 className="about-h2">Links</h2>
+        <ul className="about-list">
+          <li><a href="https://github.com/happykhan/Sassywasm" target="_blank" rel="noopener">Sassywasm source</a></li>
+          <li><a href="https://github.com/RagnarGrootKoerkamp/sassy" target="_blank" rel="noopener">sassy (upstream library)</a></li>
+        </ul>
+
+        <p className="about-version">Version {APP_VERSION}</p>
+      </div>
+    </main>
+  )
+}
+
+export default function App() {
+  return (
+    <AppShell
+      appName="Sassywasm"
+      version={APP_VERSION}
+      githubUrl="https://github.com/happykhan/Sassywasm"
+      icon={<SassyIcon />}
+    >
+      <Routes>
+        <Route path="/" element={<ToolPage />} />
+        <Route path="/about" element={<About />} />
+        <Route path="*" element={<ToolPage />} />
+      </Routes>
     </AppShell>
   )
 }

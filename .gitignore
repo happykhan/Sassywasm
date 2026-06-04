@@ -7,6 +7,12 @@ app/node_modules/
 app/dist/
 tests/node_modules/
 
+# Playwright e2e artifacts
+app/test-results/
+app/playwright-report/
+app/blob-report/
+app/.playwright/
+
 # OS
 .DS_Store
 

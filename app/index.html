@@ -11,6 +11,24 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      GitHub Pages SPA fallback decoder. When 404.html redirects an unknown
+      path (e.g. /Sassywasm/about) here as /Sassywasm/?/about, this restores
+      the real URL via history.replaceState before react-router boots.
+      Based on rafgraph/spa-github-pages.
+    -->
+    <script>
+      (function () {
+        var l = window.location;
+        if (l.search[1] === '/') {
+          var decoded = l.search.slice(1).split('&').map(function (s) {
+            return s.replace(/~and~/g, '&');
+          }).join('?');
+          window.history.replaceState(null, null,
+            l.pathname.slice(0, -1) + decoded + l.hash);
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

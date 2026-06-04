@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Sassywasm</title>
+    <!--
+      GitHub Pages SPA fallback.
+      GitHub Pages serves this file for any path it cannot find on disk
+      (e.g. /Sassywasm/about). We rewrite the URL into a query string and
+      redirect to the app root, where the snippet in index.html restores the
+      original path and hands it to react-router. Based on rafgraph/spa-github-pages.
+      pathSegmentsToKeep = 1 keeps the "/Sassywasm" project base path.
+    -->
+    <script>
+      var pathSegmentsToKeep = 1;
+      var l = window.location;
+      l.replace(
+        l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
+        l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +
+        l.pathname.slice(1).split('/').slice(pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
+        (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
+        l.hash
+      );
+    </script>
+  </head>
+  <body></body>
+</html>

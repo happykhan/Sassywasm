@@ -37,6 +37,21 @@ jobs:
         working-directory: app
         run: npm run build
 
+      - name: Lint app
+        working-directory: app
+        run: npm run lint
+
+      - name: Run WASM unit tests
+        run: node tests/wasm_tests.mjs
+
+      - name: Install Playwright browser
+        working-directory: app
+        run: npx playwright install --with-deps chromium
+
+      - name: Run e2e tests
+        working-directory: app
+        run: npm run test:e2e
+
       - name: Install sassy CLI for correctness test
         run: RUSTFLAGS="-C target-cpu=native" cargo install sassy
 

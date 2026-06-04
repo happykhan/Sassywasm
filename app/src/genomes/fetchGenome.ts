@@ -130,3 +130,16 @@ export async function fetchHumanRegion(
     fasta: `${header}\n${wrapped}\n`,
   }
 }
+
+/**
+ * Fetch an entire human chromosome from Ensembl REST. The Memory64 WASM build
+ * holds the result in browser memory, so no region windowing is applied — the
+ * full chromosome is streamed in sequential 10 Mbp chunks and stitched together.
+ */
+export function fetchWholeHumanChromosome(
+  chrom: HumanChromosome,
+  onProgress?: (p: FetchProgress) => void,
+  signal?: AbortSignal,
+): Promise<FetchedGenome> {
+  return fetchHumanRegion(chrom, 1, chrom.length, onProgress, signal)
+}

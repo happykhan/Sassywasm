@@ -2,7 +2,11 @@ import { useState, useCallback } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { AppShell, FileUpload, Alert, LogConsole } from '@genomicx/ui'
 import { GenomesPage } from './genomes/GenomesPage'
+import { RefGenomeSelector, type LoadedRef } from './genomes/RefGenomeSelector'
 import { takeGenomeHandoff } from './genomes/handoff'
+import { parseFasta, parseFastaFirst, cleanDna, cleanIupac } from './genomes/fasta'
+import { BACTERIA } from './genomes/catalog'
+import { fetchBacterialGenome } from './genomes/fetchGenome'
 import './App.css'
 
 const APP_VERSION = '0.1.0'
@@ -18,6 +22,14 @@ interface MatchResult {
 
 type Mode = 'search' | 'grep' | 'filter' | 'crispr'
 
+// Where the search target comes from: a fetched reference genome, or the
+// user's own uploaded file / pasted text.
+type TargetSource = 'reference' | 'upload'
+
+// Real example genome used by the "Load sample data" button — fetched live via
+// the same path as the reference picker so the demo exercises the full pipeline.
+const SAMPLE_GENOME = BACTERIA.find((b) => b.id === 'ecoli-k12')!
+
 const MODES: { value: Mode; label: string; cli: string; description: string }[] = [
   { value: 'search',  label: 'Search',  cli: 'sassy search',  description: 'Find all approximate matches and report positions, distances, and alignment.' },
   { value: 'grep',    label: 'Grep',    cli: 'sassy grep',    description: 'Show matches highlighted in sequence context — useful for visual inspection.' },
@@ -25,29 +37,30 @@ const MODES: { value: Mode; label: string; cli: string; description: string }[] 
   { value: 'crispr',  label: 'CRISPR', cli: 'sassy crispr',  description: 'Find CRISPR guide RNA target sites with PAM sequence on both strands.' },
 ]
 
-const EXAMPLES: Record<Mode, { pattern: string; text: string; fasta?: string; pam?: string; k: number; strand?: 'fwd' | 'rc' }> = {
+// Per-mode sample data. `search`, `grep` and `crispr` run against a real fetched
+// reference genome (E. coli K-12), so only the pattern/PAM is seeded here; the
+// target comes from SAMPLE_GENOME. `filter` operates on a multi-FASTA paste, so
+// it still carries its own inline sequences.
+const EXAMPLES: Record<Mode, { pattern: string; fasta?: string; pam?: string; k: number; strand?: 'fwd' | 'rc' }> = {
   search: {
-    pattern: 'ATCGATCGATCGATCGATCG',
-    text:    'TTTTTTTTTTTTTATCGATCGATCGATCGATCGAAAAAAAAAAAAAATCGATCGATCTATCGATCGAAAAAAAAATCGATCGATCGATCGATCG',
+    // A 24-mer from the E. coli K-12 thrA region — present in the real genome.
+    pattern: 'ATGCGAGTGTTGAAGTTCGGCGGT',
     k:       1,
     strand:  'fwd',
   },
   grep: {
-    pattern: 'ATCGATCG',
-    text:    'GGGGGGATCGATCGTTTTTTATCAATCGCCCCCCATCGATCGAAAAAA',
+    pattern: 'ATGCGAGTGTTGAAGTTCGGCGGT',
     k:       1,
     strand:  'fwd',
   },
   filter: {
     pattern: 'ATCGATCG',
-    text:    '',
     fasta:   '>seq1 (matches)\nATCGATCGATCGATCG\n>seq2 (no match)\nGGGGGGGGGGGGGGGG\n>seq3 (1 error)\nATCGATTGATCGATCG\n>seq4 (no match)\nCCCCCCCCCCCCCCCC',
     k:       1,
     strand:  'fwd',
   },
   crispr: {
-    pattern: 'ATCGATCGATCGATCGATCG',
-    text:    'TTTATCGATCGATCGATCGATCGGGGCCCCCCGATCGATCGATCGATCGATCGCCGAATCGATCGATCGATCGATCGAGG',
+    pattern: 'ATGCGAGTGTTGAAGTTCGG',
     pam:     'NGG',
     k:       1,
   },
@@ -96,27 +109,6 @@ function reportMemory(
   return
 }
 
-function parseFasta(content: string): { id: string; seq: string }[] {
-  const seqs: { id: string; seq: string }[] = []
-  let current: { id: string; seq: string } | null = null
-  for (const line of content.split('\n')) {
-    const t = line.trim()
-    if (t.startsWith('>')) {
-      if (current) seqs.push(current)
-      current = { id: t.slice(1), seq: '' }
-    } else if (current && t) {
-      current.seq += t
-    }
-  }
-  if (current) seqs.push(current)
-  return seqs
-}
-
-function parseFastaFirst(content: string): string {
-  const seqs = parseFasta(content)
-  return seqs[0]?.seq ?? content.trim()
-}
-
 function readFileText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -126,24 +118,50 @@ function readFileText(file: File): Promise<string> {
   })
 }
 
-function cleanDna(s: string) { return s.trim().toUpperCase().replace(/[^ACGT]/g, '') }
-function cleanIupac(s: string) { return s.trim().toUpperCase().replace(/[^ACGTRYMKSWHBDVN]/g, '') }
-
 // Build IUPAC pattern: guide + PAM (e.g. NGG → '[ACGT]GG' in IUPAC = NGG)
 function buildCrisprPattern(guide: string, pam: string): string {
   return cleanIupac(guide + pam)
 }
 
-// Highlight matches in the target sequence
+// Highlight matches in the target sequence.
+// Rendering a whole genome (Mbp) into the DOM would freeze the browser, so above
+// this length grep switches to a windowed view: each match with bounded flanks.
+const GREP_INLINE_LIMIT = 50_000
+const GREP_FLANK = 40
+
+function distClass(d: number) {
+  return d === 0 ? 'hl-exact' : d === 1 ? 'hl-1' : 'hl-n'
+}
+
 function renderGrep(text: string, matches: MatchResult[]): React.ReactNode[] {
   if (!matches.length) return [<span key="all">{text}</span>]
   const sorted = [...matches].sort((a, b) => a.pos - b.pos)
+
+  // Windowed view for genome-scale targets: one row of context per match.
+  if (text.length > GREP_INLINE_LIMIT) {
+    return sorted.map((m, i) => {
+      const from = Math.max(0, m.pos - GREP_FLANK)
+      const to = Math.min(text.length, m.end + GREP_FLANK)
+      return (
+        <div key={`win-${m.pos}-${i}`} className="grep-window">
+          <span className="grep-window-pos">pos {m.pos}–{m.end}</span>
+          <span className="grep-window-seq">
+            {from > 0 && <span className="grep-ellipsis">…</span>}
+            <span>{text.slice(from, m.pos)}</span>
+            <span className={distClass(m.distance)} title={`dist=${m.distance} cigar=${m.cigar}`}>{text.slice(m.pos, m.end)}</span>
+            <span>{text.slice(m.end, to)}</span>
+            {to < text.length && <span className="grep-ellipsis">…</span>}
+          </span>
+        </div>
+      )
+    })
+  }
+
   const nodes: React.ReactNode[] = []
   let cursor = 0
   for (const m of sorted) {
     if (m.pos > cursor) nodes.push(<span key={`pre-${m.pos}`}>{text.slice(cursor, m.pos)}</span>)
-    const cls = m.distance === 0 ? 'hl-exact' : m.distance === 1 ? 'hl-1' : 'hl-n'
-    nodes.push(<span key={`m-${m.pos}`} className={cls} title={`dist=${m.distance} cigar=${m.cigar}`}>{text.slice(m.pos, m.end)}</span>)
+    nodes.push(<span key={`m-${m.pos}`} className={distClass(m.distance)} title={`dist=${m.distance} cigar=${m.cigar}`}>{text.slice(m.pos, m.end)}</span>)
     cursor = m.end
   }
   if (cursor < text.length) nodes.push(<span key="tail">{text.slice(cursor)}</span>)
@@ -164,12 +182,13 @@ function SassyIcon() {
 }
 
 // Consumed once at mount: a genome handed over from the Reference Genomes page
-// seeds the search target, exactly as if the user had uploaded the FASTA file.
+// seeds the reference target, exactly as if it had been fetched in-place.
 // Read lazily in useState initialisers so it never triggers an effect re-render.
 function takeInitialGenome() {
   const handoff = takeGenomeHandoff()
   if (!handoff) return null
-  return { seq: parseFastaFirst(handoff.fasta), filename: handoff.filename }
+  const seq = cleanDna(parseFastaFirst(handoff.fasta))
+  return { seq, filename: handoff.filename }
 }
 
 function ToolPage() {
@@ -177,7 +196,14 @@ function ToolPage() {
   const [initialGenome] = useState(takeInitialGenome)
   const [mode, setMode] = useState<Mode>('search')
   const [pattern, setPattern] = useState('')
-  const [text, setText] = useState(initialGenome?.seq ?? '')
+  const [text, setText] = useState('')
+  // The active reference genome (fetched, never rendered in a textarea). When
+  // set, it is the effective search target; otherwise the upload/paste text is.
+  const [refSeq, setRefSeq] = useState<string | null>(initialGenome?.seq ?? null)
+  const [refLabel, setRefLabel] = useState<string | null>(
+    initialGenome ? `${initialGenome.filename} — ${(initialGenome.seq.length / 1e6).toFixed(2)} Mbp` : null,
+  )
+  const [targetSource, setTargetSource] = useState<TargetSource>('reference')
   const [fasta, setFasta] = useState('')          // for filter mode
   const [pam, setPam] = useState('NGG')           // for CRISPR mode
   const [k, setK] = useState(1)
@@ -187,6 +213,9 @@ function ToolPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [searchTime, setSearchTime] = useState<number | null>(null)
+  // The cleaned target actually searched, captured so grep can highlight it
+  // even when the source was a fetched reference genome (never in `text`).
+  const [grepTarget, setGrepTarget] = useState('')
   // `key` counters force the FileUpload to remount after each read. This resets the
   // underlying <input> value so re-selecting the *same* file fires a fresh change
   // event — without this, a second upload of an identical file is silently ignored.
@@ -228,22 +257,69 @@ function ToolPage() {
       .finally(() => setTextUploadKey((n) => n + 1))
   }, [addLog, mode])
 
-  const loadExample = useCallback(() => {
+  // Reference genome fetched in-place by the selector. Already cleaned to DNA.
+  const handleRefLoaded = useCallback((loaded: LoadedRef) => {
+    setRefSeq(loaded.seq)
+    setRefLabel(loaded.label)
+    setError(null)
+    setResults([]); setFilterResults([]); setSearchTime(null)
+  }, [])
+
+  const clearRef = useCallback(() => {
+    setRefSeq(null)
+    setRefLabel(null)
+    addLog('[ref] cleared reference genome')
+  }, [addLog])
+
+  const [sampleLoading, setSampleLoading] = useState(false)
+
+  const loadExample = useCallback(async () => {
     const ex = EXAMPLES[mode]
     setPattern(ex.pattern)
-    if (mode === 'filter') setFasta(ex.fasta ?? '')
-    else setText(ex.text)
     if (mode === 'crispr') setPam(ex.pam ?? 'NGG')
     setK(ex.k)
     if (ex.strand) setStrand(ex.strand)
     setError(null)
     setResults([]); setFilterResults([]); setSearchTime(null)
-    addLog(`[sample] loaded sample data for "${mode}" mode (k=${ex.k})`)
+
+    // Filter operates on a pasted multi-FASTA; it does not use a reference genome.
+    if (mode === 'filter') {
+      setFasta(ex.fasta ?? '')
+      setTargetSource('upload')
+      addLog(`[sample] loaded sample FASTA for "filter" mode (k=${ex.k})`)
+      return
+    }
+
+    // Search / grep / crispr run against a real fetched genome (E. coli K-12),
+    // exercising the same fetch path as the reference picker.
+    setTargetSource('reference')
+    setSampleLoading(true)
+    addLog(`[sample] fetching real example genome ${SAMPLE_GENOME.name} (${SAMPLE_GENOME.accession})…`)
+    try {
+      const result = await fetchBacterialGenome(SAMPLE_GENOME)
+      const seq = cleanDna(parseFastaFirst(result.fasta))
+      if (!seq) throw new Error('Example genome contained no DNA bases')
+      setRefSeq(seq)
+      setRefLabel(`${SAMPLE_GENOME.name} — ${(seq.length / 1e6).toFixed(2)} Mbp`)
+      addLog(`[sample] loaded ${SAMPLE_GENOME.name} (${seq.length.toLocaleString()} bp)`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(`Could not fetch example genome: ${msg}`)
+      addLog(`[sample] error: ${msg}`)
+    } finally {
+      setSampleLoading(false)
+    }
   }, [mode, addLog])
 
   const handleSearch = useCallback(async () => {
     setError(null); setResults([]); setFilterResults([]); setSearchTime(null)
     if (!pattern.trim()) { setError('Pattern is required'); return }
+
+    // Effective target follows the chosen source: a fetched reference genome
+    // (already cleaned to DNA), or the user's pasted/uploaded text. Filter mode
+    // ignores this and reads the multi-FASTA paste directly.
+    const effectiveTarget = targetSource === 'reference' ? (refSeq ?? '') : cleanDna(text)
+    setGrepTarget(effectiveTarget)
 
     setLoading(true)
     addLog(`[${mode}] starting — pattern length ${pattern.trim().length}, k=${k}`)
@@ -267,21 +343,19 @@ function ToolPage() {
       } else if (mode === 'crispr') {
         const crisprPat = buildCrisprPattern(pattern, pam)
         if (crisprPat.length < 4) { setError('Guide + PAM pattern is too short'); setLoading(false); return }
-        const cleanText = cleanDna(text)
-        if (!cleanText) { setError('Target sequence required'); setLoading(false); return }
-        addLog(`[crispr] guide+PAM="${crisprPat}", text length=${cleanText.length}`)
+        if (!effectiveTarget) { setError('Target sequence required'); setLoading(false); return }
+        addLog(`[crispr] guide+PAM="${crisprPat}", text length=${effectiveTarget.length}`)
         const fn = wasm['search_iupac_rc'] as (p: string, t: string, k: number) => MatchResult[]
-        const res = fn(crisprPat, cleanText, k)
+        const res = fn(crisprPat, effectiveTarget, k)
         setResults(res)
         addLog(`[crispr] done — ${res.length} target site${res.length !== 1 ? 's' : ''} found`)
       } else {
         const cleanPat = cleanDna(pattern)
-        const cleanText = cleanDna(text)
         if (!cleanPat) { setError('Pattern must be valid DNA'); setLoading(false); return }
-        if (!cleanText) { setError('Target sequence required'); setLoading(false); return }
-        addLog(`[${mode}] pattern="${cleanPat}", text length=${cleanText.length}, strand=${strand}`)
+        if (!effectiveTarget) { setError('Target sequence required'); setLoading(false); return }
+        addLog(`[${mode}] pattern="${cleanPat}", text length=${effectiveTarget.length}, strand=${strand}`)
         const fn = (strand === 'rc' ? wasm['search_rc'] : wasm['search']) as (p: string, t: string, k: number) => MatchResult[]
-        const res = fn(cleanPat, cleanText, k)
+        const res = fn(cleanPat, effectiveTarget, k)
         setResults(res)
         addLog(`[${mode}] done — ${res.length} match${res.length !== 1 ? 'es' : ''} found`)
       }
@@ -296,7 +370,7 @@ function ToolPage() {
     } finally {
       setLoading(false)
     }
-  }, [pattern, text, fasta, pam, k, strand, mode, addLog])
+  }, [pattern, text, refSeq, targetSource, fasta, pam, k, strand, mode, addLog])
 
   return (
       <main className="tool-main">
@@ -335,23 +409,52 @@ function ToolPage() {
           </div>
 
           <div className="card">
-            <label className="field-label">
-              {mode === 'filter' ? 'Target sequences (FASTA — one per line)' : 'Target sequence'}
-            </label>
             {mode === 'filter' ? (
-              <textarea className="seq-input fasta-input" value={fasta}
-                onChange={(e) => setFasta(e.target.value)}
-                placeholder={'>seq1\nACGT...\n>seq2\nACGT...'}
-                rows={6}
-              />
+              <>
+                <label className="field-label">Target sequences (FASTA — one per line)</label>
+                <textarea className="seq-input fasta-input" value={fasta}
+                  onChange={(e) => setFasta(e.target.value)}
+                  placeholder={'>seq1\nACGT...\n>seq2\nACGT...'}
+                  rows={6}
+                />
+                <FileUpload key={textUploadKey} files={[]} onFilesChange={handleTextFiles} multiple={false} accept=".fasta,.fa,.fna,.txt" label="Upload FASTA" />
+              </>
             ) : (
-              <textarea className="seq-input" value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="longer DNA sequence to search in"
-                rows={3}
-              />
+              <>
+                <label className="field-label">Target sequence</label>
+                <div className="source-toggle">
+                  <button type="button"
+                    className={`mode-btn${targetSource === 'reference' ? ' active' : ''}`}
+                    onClick={() => setTargetSource('reference')}
+                  >Reference sequence</button>
+                  <button type="button"
+                    className={`mode-btn${targetSource === 'upload' ? ' active' : ''}`}
+                    onClick={() => setTargetSource('upload')}
+                  >Upload your own</button>
+                </div>
+
+                {targetSource === 'reference' ? (
+                  <div className="ref-pane">
+                    {refSeq !== null && (
+                      <div className="ref-chip" data-testid="ref-chip">
+                        <span className="ref-chip-label">{refLabel} loaded</span>
+                        <button type="button" className="ref-chip-clear" onClick={clearRef} aria-label="Clear reference genome">× Clear</button>
+                      </div>
+                    )}
+                    <RefGenomeSelector onLoaded={handleRefLoaded} onLog={addLog} />
+                  </div>
+                ) : (
+                  <>
+                    <textarea className="seq-input" value={text}
+                      onChange={(e) => setText(e.target.value)}
+                      placeholder="longer DNA sequence to search in"
+                      rows={3}
+                    />
+                    <FileUpload key={textUploadKey} files={[]} onFilesChange={handleTextFiles} multiple={false} accept=".fasta,.fa,.fna,.txt" label="Upload FASTA" />
+                  </>
+                )}
+              </>
             )}
-            <FileUpload key={textUploadKey} files={[]} onFilesChange={handleTextFiles} multiple={false} accept=".fasta,.fa,.fna,.txt" label="Upload FASTA" />
           </div>
         </div>
 
@@ -368,8 +471,8 @@ function ToolPage() {
         )}
 
         <div className="controls">
-          <button type="button" className="btn-outline" onClick={loadExample}>
-            Load sample data ({MODES.find((m) => m.value === mode)?.label})
+          <button type="button" className="btn-outline" onClick={loadExample} disabled={sampleLoading}>
+            {sampleLoading ? 'Fetching example…' : `Load sample data (${MODES.find((m) => m.value === mode)?.label})`}
           </button>
 
           {mode !== 'crispr' && (
@@ -436,7 +539,7 @@ function ToolPage() {
         {mode === 'grep' && results.length > 0 && (
           <div className="card grep-output">
             <p className="grep-hint">Matches highlighted in sequence. Hover for details.</p>
-            <div className="grep-seq">{renderGrep(cleanDna(text), results)}</div>
+            <div className="grep-seq">{renderGrep(grepTarget, results)}</div>
           </div>
         )}
 

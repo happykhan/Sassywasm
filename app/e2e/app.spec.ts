@@ -15,7 +15,25 @@ function writeFasta(name: string, contents: string): string {
 // The submit button shares the word "Search" with the mode bar, so target the
 // primary action button by its class to stay unambiguous.
 function clickRun(page: Page) {
-  return page.locator('button.btn-primary').click()
+  return page.locator('button.btn-primary').filter({ hasText: /Search/ }).click()
+}
+
+// Switch the target source to the upload/paste pane so the second textarea is shown.
+async function useUploadSource(page: Page) {
+  await page.getByRole('button', { name: 'Upload your own' }).click()
+}
+
+// A synthetic E. coli-like genome containing the K-12 sample pattern, so the
+// sample-data flow (which fetches via ENA) is deterministic and offline.
+const SAMPLE_PATTERN = 'ATGCGAGTGTTGAAGTTCGGCGGT'
+const FAKE_K12_FASTA =
+  '>ENA|U00096|U00096.3 Escherichia coli str. K-12 substr. MG1655, complete genome.\n' +
+  ('TTTTTTTTTT' + SAMPLE_PATTERN + 'AAAAAAAAAA').repeat(5) + '\n'
+
+async function mockEnaK12(page: Page) {
+  await page.route('**/ena/browser/api/fasta/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/x-fasta', body: FAKE_K12_FASTA }),
+  )
 }
 
 // Core / smoke ----------------------------------------------------------------
@@ -31,6 +49,7 @@ test('app loads with the four CLI modes', async ({ page }) => {
 test('search finds the expected matches', async ({ page }) => {
   await page.goto('/')
   await page.locator('textarea').nth(0).fill('ATCGATCG')
+  await useUploadSource(page)
   await page.locator('textarea').nth(1).fill('AAAAAATCGATCGAAAAAATCGATCGAA')
   await clickRun(page)
   await expect(page.locator('.results-summary')).toBeVisible()
@@ -42,25 +61,28 @@ test('search finds the expected matches', async ({ page }) => {
 // Sample data button ----------------------------------------------------------
 
 test('sample data button populates inputs and runs for each mode', async ({ page }) => {
+  await mockEnaK12(page)
   await page.goto('/')
 
-  // search mode
+  // search mode: seeds the pattern and fetches the real K-12 reference genome
   await page.getByRole('button', { name: /Load sample data/ }).click()
-  await expect(page.locator('textarea').nth(0)).not.toHaveValue('')
+  await expect(page.locator('textarea').nth(0)).toHaveValue(SAMPLE_PATTERN)
+  await expect(page.getByTestId('ref-chip')).toContainText('loaded')
   await clickRun(page)
   await expect(page.locator('.match-card').first()).toBeVisible()
 
-  // filter mode loads FASTA sample
+  // filter mode loads FASTA sample (no reference genome involved)
   await page.getByText('sassy filter', { exact: true }).click()
   await page.getByRole('button', { name: /Load sample data/ }).click()
   await expect(page.locator('textarea.fasta-input')).toContainText('>seq1')
   await clickRun(page)
   await expect(page.locator('.filter-row').first()).toBeVisible()
 
-  // crispr mode loads guide + sets PAM
+  // crispr mode loads guide + sets PAM, runs against the fetched reference
   await page.getByText('sassy crispr', { exact: true }).click()
   await page.getByRole('button', { name: /Load sample data/ }).click()
   await expect(page.locator('textarea').nth(0)).not.toHaveValue('')
+  await expect(page.getByTestId('ref-chip')).toContainText('loaded')
   await clickRun(page)
   await expect(page.locator('.results-summary')).toBeVisible()
 })
@@ -69,6 +91,7 @@ test('sample data button populates inputs and runs for each mode', async ({ page
 
 test('uploading a FASTA file populates the pattern and target', async ({ page }) => {
   await page.goto('/')
+  await useUploadSource(page)
   const pat = writeFasta('pattern.fasta', '>p\nATCGATCGATCGATCGATCG\n')
   const tgt = writeFasta('target.fasta', '>t\nTTTTATCGATCGATCGATCGATCGAAAA\n')
 
@@ -133,16 +156,6 @@ test('404.html fallback is served with the redirect script', async ({ request })
 // External APIs (ENA, Ensembl) are mocked so the test is deterministic and runs
 // offline. The mock returns a known E. coli-like sequence we can assert on.
 
-const FAKE_ENA_FASTA =
-  '>ENA|U00096|U00096.3 Escherichia coli str. K-12 substr. MG1655, complete genome.\n' +
-  'ATCGATCGATCGATCGATCG'.repeat(20) + '\n'
-
-async function mockEna(page: Page) {
-  await page.route('**/ena/browser/api/fasta/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'text/x-fasta', body: FAKE_ENA_FASTA }),
-  )
-}
-
 test('Reference Genomes page lists curated bacteria and human chromosomes', async ({ page }) => {
   await page.goto('genomes')
   await expect(page.locator('.hero-title')).toHaveText('Reference Genomes')
@@ -160,26 +173,46 @@ test('nav action links from the tool page to Reference Genomes', async ({ page }
   await expect(page.locator('.hero-title')).toHaveText('Reference Genomes')
 })
 
-test('"Use in tool" loads a fetched bacterial genome as the search target', async ({ page }) => {
-  await mockEna(page)
+test('"Use in tool" loads a fetched bacterial genome as the reference target', async ({ page }) => {
+  await mockEnaK12(page)
   await page.goto('genomes')
 
   const card = page.locator('[data-genome="ecoli-k12"]')
   await card.getByRole('button', { name: 'Use in tool' }).click()
 
-  // We are routed back to the tool with the sequence loaded into the target box.
+  // We are routed back to the tool with the genome loaded as the reference target,
+  // surfaced as a status chip (never rendered in a textarea).
   await expect(page).toHaveURL(/\/Sassywasm\/?$/)
-  const target = page.locator('textarea').nth(1)
-  await expect(target).toHaveValue(/^ATCGATCGATCG/)
+  await expect(page.getByTestId('ref-chip')).toContainText('loaded')
 
   // And it is usable as input: searching for a known motif finds matches.
-  await page.locator('textarea').nth(0).fill('ATCGATCGATCG')
-  await page.locator('button.btn-primary').click()
+  await page.locator('textarea').nth(0).fill(SAMPLE_PATTERN)
+  await clickRun(page)
+  await expect(page.locator('.match-card').first()).toBeVisible()
+})
+
+test('clearing the reference chip removes the loaded genome', async ({ page }) => {
+  await mockEnaK12(page)
+  await page.goto('genomes')
+  await page.locator('[data-genome="ecoli-k12"]').getByRole('button', { name: 'Use in tool' }).click()
+  await expect(page.getByTestId('ref-chip')).toBeVisible()
+  await page.getByRole('button', { name: 'Clear reference genome' }).click()
+  await expect(page.getByTestId('ref-chip')).toHaveCount(0)
+})
+
+test('fetching a bacterial reference from the tool page loads it directly', async ({ page }) => {
+  await mockEnaK12(page)
+  await page.goto('/')
+  // Reference source is the default; pick E. coli K-12 inline.
+  await page.locator('.ref-pick[data-genome="ecoli-k12"]').click()
+  await expect(page.getByTestId('ref-chip')).toContainText('loaded')
+  await page.locator('textarea').nth(0).fill(SAMPLE_PATTERN)
+  await clickRun(page)
   await expect(page.locator('.match-card').first()).toBeVisible()
 })
 
 test('downloading a bacterial genome triggers a FASTA file download', async ({ page }) => {
-  await mockEna(page)
+  await mockEnaK12(page)
   await page.goto('genomes')
 
   const card = page.locator('[data-genome="ecoli-k12"]')

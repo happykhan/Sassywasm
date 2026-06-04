@@ -53,15 +53,15 @@ if [ "$MEMORY64" -eq 1 ]; then
     cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" >/dev/null 2>&1
   fi
 
-  echo "    compiling crate for $TARGET (build-std)..."
-  # NB: simd128 is NOT enabled for the wasm64 target. The `wide` crate (a
-  # transitive SIMD dependency of sassy) fails to compile for
-  # wasm64-unknown-unknown when +simd128 is set — its wide SIMD vector types
-  # ([u64;4]/[u64;8]) have "unknown layout" under the wasm64 ABI on current
-  # nightly. The sassy crate is built with its `scalar` feature here, so the
-  # scalar code path is the intended one regardless. Re-add +simd128 only once
-  # `wide`'s wasm-SIMD path supports the wasm64 target.
-  cargo +nightly build --release --target "$TARGET" \
+  echo "    compiling crate for $TARGET (build-std, +simd128)..."
+  # simd128 IS enabled for the wasm64 target. Upstream `wide` (a transitive SIMD
+  # dependency of sassy) hardcodes `use core::arch::wasm32::*` in its simd128
+  # branch, which does not resolve on wasm64-unknown-unknown. sassy-wasm/Cargo.toml
+  # patches `wide` to a vendored copy (vendor/wide-1.4.0-wasm64) that adds the
+  # wasm64 intrinsics path (core::arch::wasm64, gated behind the unstable
+  # simd_wasm64 feature). With that patch the +simd128 build compiles and runs
+  # the SIMD code path instead of the scalar fallback.
+  RUSTFLAGS="-C target-feature=+simd128" cargo +nightly build --release --target "$TARGET" \
     -Z build-std=std,panic_abort
 
   WASM_IN="target/$TARGET/release/sassy_wasm.wasm"

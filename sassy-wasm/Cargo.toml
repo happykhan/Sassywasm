@@ -15,3 +15,13 @@ serde-wasm-bindgen = "0.6"
 version = "0.2"
 default-features = false
 features = ["scalar"]
+
+# `wide` (a transitive SIMD dep of sassy) hardcodes `use core::arch::wasm32::*`
+# under its `simd128` branch. That module path does not exist on the
+# wasm64-unknown-unknown target (core::arch::wasm32 is gated to target_arch =
+# "wasm32"), so any +simd128 build for wasm64 fails to compile. The vendored
+# copy below adds a wasm64 branch (core::arch::wasm64, behind the unstable
+# simd_wasm64 feature) so SIMD works on the Memory64 target. The patch is a
+# no-op on wasm32 and native targets — they keep the upstream code path.
+[patch.crates-io]
+wide = { path = "../vendor/wide-1.4.0-wasm64" }

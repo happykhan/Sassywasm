@@ -28,8 +28,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          # Node 22+ is required to instantiate a Memory64 WebAssembly module.
-          node-version: 22
+          # Node 24+ is required: its V8 accepts the 64-bit funcref table that
+          # wasm-bindgen emits for the Memory64 module. Node 22's V8 rejects it
+          # ("invalid table elements limits flags") and cannot instantiate it.
+          node-version: 24
 
       - name: Install app dependencies
         working-directory: app

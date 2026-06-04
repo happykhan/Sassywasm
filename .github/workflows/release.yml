@@ -14,17 +14,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # Release the 64-bit (Memory64 / wasm64) module. Needs nightly + rust-src
+      # for the Tier 3 wasm64-unknown-unknown target (build-std).
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          targets: wasm32-unknown-unknown
+          components: rust-src
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack
-
-      - name: Build sassy-wasm
-        working-directory: sassy-wasm
-        run: RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web
+      - name: Build sassy-wasm (64-bit / Memory64)
+        run: ./build.sh --memory64 --skip-app
 
       - name: Create GitHub release with WASM assets
         uses: softprops/action-gh-release@v2

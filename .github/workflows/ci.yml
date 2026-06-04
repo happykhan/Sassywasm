@@ -12,22 +12,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # 64-bit (Memory64 / wasm64) build. wasm64-unknown-unknown is a Tier 3
+      # target with no prebuilt std, so it needs nightly + rust-src + build-std.
+      # build.sh --memory64 drives the whole compile (cargo build-std +
+      # wasm-bindgen). Safari has no Memory64 support and will not load this
+      # module — that is an accepted trade-off; we ship 64-bit only.
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          targets: wasm32-unknown-unknown
+          components: rust-src
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack
-
-      - name: Build sassy-wasm
-        working-directory: sassy-wasm
-        run: RUSTFLAGS="-C target-feature=+simd128" wasm-pack build --target web
+      - name: Build sassy-wasm (64-bit / Memory64)
+        run: ./build.sh --memory64 --skip-app
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22+ is required to instantiate a Memory64 WebAssembly module.
+          node-version: 22
 
       - name: Install app dependencies
         working-directory: app

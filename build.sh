@@ -54,9 +54,15 @@ if [ "$MEMORY64" -eq 1 ]; then
   fi
 
   echo "    compiling crate for $TARGET (build-std)..."
-  RUSTFLAGS="-C target-feature=+simd128" \
-    cargo +nightly build --release --target "$TARGET" \
-      -Z build-std=std,panic_abort
+  # NB: simd128 is NOT enabled for the wasm64 target. The `wide` crate (a
+  # transitive SIMD dependency of sassy) fails to compile for
+  # wasm64-unknown-unknown when +simd128 is set — its wide SIMD vector types
+  # ([u64;4]/[u64;8]) have "unknown layout" under the wasm64 ABI on current
+  # nightly. The sassy crate is built with its `scalar` feature here, so the
+  # scalar code path is the intended one regardless. Re-add +simd128 only once
+  # `wide`'s wasm-SIMD path supports the wasm64 target.
+  cargo +nightly build --release --target "$TARGET" \
+    -Z build-std=std,panic_abort
 
   WASM_IN="target/$TARGET/release/sassy_wasm.wasm"
   echo "    running wasm-bindgen on $WASM_IN..."
@@ -66,6 +72,31 @@ if [ "$MEMORY64" -eq 1 ]; then
   # on PATH.
   rm -rf pkg
   wasm-bindgen --target web --out-dir pkg "$WASM_IN"
+
+  # wasm-bindgen (unlike wasm-pack) does not emit a pkg/package.json. The Vite
+  # app resolves the bare `import("sassy-wasm")` specifier (aliased to pkg/) via
+  # this manifest's `module`/`main` fields, so without it the bundler resolves
+  # the alias to the directory and fails ("Is a directory"). Emit the same
+  # manifest wasm-pack --target web would have written.
+  CRATE_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+  cat > pkg/package.json <<EOF
+{
+  "name": "sassy-wasm",
+  "type": "module",
+  "version": "$CRATE_VERSION",
+  "files": [
+    "sassy_wasm_bg.wasm",
+    "sassy_wasm.js",
+    "sassy_wasm.d.ts"
+  ],
+  "main": "sassy_wasm.js",
+  "module": "sassy_wasm.js",
+  "types": "sassy_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
+EOF
 
   echo "    wasm64 module written to pkg/ (memory type: 64-bit)"
 else

@@ -30,7 +30,21 @@ sassy-wasm/     Rust wrapper crate: wasm-bindgen bindings around sassy
 app/            Vite + React + TypeScript SPA
 tests/          Correctness tests (WASM vs native CLI)
 build.sh        One-command build script
+MEMORY.md       Linear-memory limits, 4 GiB vs Memory64, browser support
 ```
+
+## Memory
+
+The default build targets `wasm32` and grows linear memory on demand up to the
+wasm32 ceiling of **4 GiB** (no artificial cap). An experimental `wasm64` /
+Memory64 build can address **beyond 4 GiB** (Chrome caps it at ~16 GB):
+
+```bash
+./build.sh --memory64
+```
+
+Memory64 ships in Chrome, is flagged in Firefox, and is not yet in Safari, so it
+is an opt-in build rather than the public default. See [MEMORY.md](MEMORY.md).
 
 ## Correctness
 

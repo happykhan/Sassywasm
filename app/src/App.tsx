@@ -61,8 +61,39 @@ async function loadWasm(addLog: (msg: string) => void): Promise<Record<string, u
   addLog('[wasm] running init()…')
   await (wasm.default as () => Promise<void>)()
   wasmModule = wasm as unknown as Record<string, unknown>
+  reportMemory(wasm as unknown as { memory?: WebAssembly.Memory }, addLog)
   addLog('[wasm] ready')
   return wasmModule
+}
+
+// Report the linear-memory type and current size of the loaded module.
+// A 32-bit (wasm32) module can grow to at most 4 GiB; a 64-bit (Memory64)
+// module can grow beyond 4 GiB (browsers cap it at ~16 GB). The buffer kind
+// distinguishes them: SharedArrayBuffer vs ArrayBuffer is orthogonal, but the
+// `maximum`-less growth and >4 GiB addressability come from the module's
+// memory index type, baked in at compile time.
+function reportMemory(
+  mod: { memory?: WebAssembly.Memory },
+  addLog: (msg: string) => void,
+): void {
+  const mem = mod.memory
+  if (!mem || !(mem instanceof WebAssembly.Memory)) {
+    addLog('[wasm] memory: not exported by module')
+    return
+  }
+  const bytes = mem.buffer.byteLength
+  const mb = (bytes / 2 ** 20).toFixed(1)
+  // wasm32 modules can never exceed 4 GiB; if the live buffer is already at or
+  // above that, the module must be Memory64. Below that we report the wasm32
+  // ceiling and note that the true type is fixed at compile time.
+  const over4gib = bytes >= 2 ** 32
+  addLog(`[wasm] linear memory: ${mb} MiB in use`)
+  addLog(
+    over4gib
+      ? '[wasm] Memory64 active — can grow beyond 4 GiB (browser caps ~16 GB)'
+      : '[wasm] memory grows on demand; wasm32 ceiling is 4 GiB',
+  )
+  return
 }
 
 function parseFasta(content: string): { id: string; seq: string }[] {

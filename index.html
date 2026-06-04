@@ -8,10 +8,28 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-    <script type="module" crossorigin src="/Sassywasm/assets/index-B0tz8oDv.js"></script>
-    <link rel="stylesheet" crossorigin href="/Sassywasm/assets/index-dCYJeS4j.css">
+    <script type="module" crossorigin src="/Sassywasm/assets/index-DFzkw97J.js"></script>
+    <link rel="stylesheet" crossorigin href="/Sassywasm/assets/index-DaZOgpx6.css">
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      GitHub Pages SPA fallback decoder. When 404.html redirects an unknown
+      path (e.g. /Sassywasm/about) here as /Sassywasm/?/about, this restores
+      the real URL via history.replaceState before react-router boots.
+      Based on rafgraph/spa-github-pages.
+    -->
+    <script>
+      (function () {
+        var l = window.location;
+        if (l.search[1] === '/') {
+          var decoded = l.search.slice(1).split('&').map(function (s) {
+            return s.replace(/~and~/g, '&');
+          }).join('?');
+          window.history.replaceState(null, null,
+            l.pathname.slice(0, -1) + decoded + l.hash);
+        }
+      })();
+    </script>
   </body>
 </html>

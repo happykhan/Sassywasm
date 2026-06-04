@@ -1,6 +1,8 @@
 import { useState, useCallback } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Link } from 'react-router-dom'
 import { AppShell, FileUpload, Alert, LogConsole } from '@genomicx/ui'
+import { GenomesPage } from './genomes/GenomesPage'
+import { takeGenomeHandoff } from './genomes/handoff'
 import './App.css'
 
 const APP_VERSION = '0.1.0'
@@ -130,10 +132,21 @@ function SassyIcon() {
   )
 }
 
+// Consumed once at mount: a genome handed over from the Reference Genomes page
+// seeds the search target, exactly as if the user had uploaded the FASTA file.
+// Read lazily in useState initialisers so it never triggers an effect re-render.
+function takeInitialGenome() {
+  const handoff = takeGenomeHandoff()
+  if (!handoff) return null
+  return { seq: parseFastaFirst(handoff.fasta), filename: handoff.filename }
+}
+
 function ToolPage() {
+  // Read the handoff exactly once for this mount.
+  const [initialGenome] = useState(takeInitialGenome)
   const [mode, setMode] = useState<Mode>('search')
   const [pattern, setPattern] = useState('')
-  const [text, setText] = useState('')
+  const [text, setText] = useState(initialGenome?.seq ?? '')
   const [fasta, setFasta] = useState('')          // for filter mode
   const [pam, setPam] = useState('NGG')           // for CRISPR mode
   const [k, setK] = useState(1)
@@ -148,7 +161,9 @@ function ToolPage() {
   // event — without this, a second upload of an identical file is silently ignored.
   const [patternUploadKey, setPatternUploadKey] = useState(0)
   const [textUploadKey, setTextUploadKey] = useState(0)
-  const [logs, setLogs] = useState<string[]>([])
+  const [logs, setLogs] = useState<string[]>(
+    initialGenome ? [`[genome] loaded "${initialGenome.filename}" from Reference Genomes`] : [],
+  )
 
   const addLog = useCallback((msg: string) => {
     const ts = new Date().toISOString().slice(11, 23)
@@ -444,6 +459,15 @@ function About() {
           <li><strong>CRISPR</strong> — find guide RNA target sites with a PAM sequence on both strands.</li>
         </ul>
 
+        <h2 className="about-h2">Reference Genomes</h2>
+        <p>
+          The <strong>Reference Genomes</strong> page fetches sequences directly in the browser —
+          complete bacterial chromosomes from the EBI European Nucleotide Archive, and regions of
+          human chromosomes (GRCh38) from Ensembl. Downloaded sequences can be saved as FASTA or
+          loaded straight into the search target. As with everything else, the fetch happens
+          client-side; no data passes through a Sassywasm server.
+        </p>
+
         <h2 className="about-h2">Links</h2>
         <ul className="about-list">
           <li><a href="https://github.com/happykhan/Sassywasm" target="_blank" rel="noopener">Sassywasm source</a></li>
@@ -463,9 +487,12 @@ export default function App() {
       version={APP_VERSION}
       githubUrl="https://github.com/happykhan/Sassywasm"
       icon={<SassyIcon />}
+      actions={<Link className="nav-action" to="/genomes">Reference Genomes</Link>}
+      mobileActions={<Link className="nav-action" to="/genomes">Reference Genomes</Link>}
     >
       <Routes>
         <Route path="/" element={<ToolPage />} />
+        <Route path="/genomes" element={<GenomesPage />} />
         <Route path="/about" element={<About />} />
         <Route path="*" element={<ToolPage />} />
       </Routes>

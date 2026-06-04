@@ -53,7 +53,16 @@ The new **`--memory64` path** in `build.sh`:
    target with **no prebuilt standard library**, so it requires Rust **nightly**
    plus `-Z build-std=std,panic_abort` to build std from source. The whole
    `sassy` dependency tree (sassy, serde, serde-wasm-bindgen, wide, rayon, …)
-   compiles cleanly for wasm64.
+   compiles cleanly for wasm64. The build is compiled with
+   `-C target-feature=+simd128`, so the **SIMD code path is active** on wasm64,
+   not the scalar fallback. This needs a patched `wide`: upstream `wide` 1.4.0
+   hardcodes `use core::arch::wasm32::*` in its `simd128` branch, which does not
+   resolve on wasm64 (`core::arch::wasm32` is gated to `target_arch = "wasm32"`).
+   A vendored copy at `vendor/wide-1.4.0-wasm64` (referenced via
+   `[patch.crates-io]` in `sassy-wasm/Cargo.toml`) adds a `core::arch::wasm64`
+   branch behind the unstable `simd_wasm64` feature. The patch is a no-op on the
+   wasm32 (shippable) build. Verified: 2575 SIMD-prefix opcodes in the shipped
+   wasm64 code section vs ~0 for a scalar build; all 20 WASM unit tests pass.
 2. Runs `wasm-bindgen` (matched to the lockfile version) directly on the
    resulting `.wasm`. wasm-bindgen ≥ 0.2.121 supports the wasm64 ABI — `usize`
    and pointers are lowered through the JS-number (f64) ABI — and **preserves
